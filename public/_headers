@@ -1,0 +1,7 @@
+# Cloudflare Pages headers. Vite emits content-hashed files into /assets.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

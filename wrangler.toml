@@ -1,0 +1,6 @@
+# Cloudflare Pages project config (static site, no Functions).
+# Deployed by .github/workflows/deploy.yml to https://sailwing.burso.eu,
+# or manually with `npm run deploy`.
+name = "sailwing"
+pages_build_output_dir = "dist"
+compatibility_date = "2026-10-01"

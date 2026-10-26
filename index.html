@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#070d1a" />
+    <meta name="description" content="Play with the wind and your sails. Live wind on the map, sail trim simulator and race course planner." />
+    <title>Sailwing</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
+            <path d="M16 3 L16 23 L5 23 Z" fill="#2dd4bf" />
+            <path d="M18 7 C25 12 26 18 25 23 L18 23 Z" fill="#e2e8f0" />
+            <path d="M4 26 C10 29 22 29 28 26" stroke="#60a5fa" stroke-width="2" fill="none" stroke-linecap="round" />
+          </svg>
+          <span>Sailwing</span>
+        </div>
+        <div class="topbar-stats">
+          <div class="chip"><span class="dot wind"></span><span id="topWind">—</span></div>
+          <div class="chip"><span class="dot boat"></span><span id="topBoat">—</span></div>
+          <div class="chip gps-chip hidden" id="gpsChip"><span class="dot gps"></span><span id="topGps">GPS</span></div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="map-pane">
+          <div id="map"></div>
+
+          <div class="map-toolbar glass">
+            <div class="seg" id="mapMode" role="tablist">
+              <button data-mode="pick" class="active">Location</button>
+              <button data-mode="track">Race track</button>
+            </div>
+            <button class="btn ghost small" id="liveWindBtn" title="Fetch live wind at the boat">
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+              Live wind
+            </button>
+            <button class="btn ghost small" id="gpsBtn" title="Use this device's GPS position">
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" /><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.6" /></svg>
+              GPS
+            </button>
+          </div>
+          <div class="map-hint glass" id="mapHint"></div>
+
+          <div class="wind-card glass">
+            <svg class="wind-dial" id="windDial" viewBox="0 0 120 120" aria-label="Wind direction — drag to change">
+              <circle cx="60" cy="60" r="52" class="dial-ring" />
+              <g id="dialTicks"></g>
+              <text x="60" y="20" class="dial-n">N</text>
+              <text x="102" y="61" class="dial-l">E</text>
+              <text x="60" y="103" class="dial-l">S</text>
+              <text x="18" y="61" class="dial-l">W</text>
+              <g id="dialArrow">
+                <line x1="60" y1="14" x2="60" y2="96" class="dial-shaft" />
+                <path d="M60 104 L53 90 L67 90 Z" class="dial-head" />
+                <circle cx="60" cy="12" r="6" class="dial-handle" />
+              </g>
+            </svg>
+            <div class="wind-info">
+              <div class="eyebrow">True wind <span class="badge" id="windSource">Manual</span></div>
+              <div class="wind-value"><span id="windSpeedVal">12</span><small>kn</small></div>
+              <div class="wind-dir" id="windDirVal">from W · 270°</div>
+              <input type="range" id="windSpeed" min="0" max="35" step="0.5" value="12" aria-label="Wind speed" />
+            </div>
+          </div>
+        </section>
+
+        <section class="side-pane">
+          <div class="seg tabs" id="tabs" role="tablist">
+            <button data-tab="trim" class="active">Trim</button>
+            <button data-tab="plan">Plan</button>
+          </div>
+
+          <div class="tab" id="tab-trim">
+            <div class="card nav-card hidden" id="navCard">
+              <div class="nav-top">
+                <div>
+                  <div class="eyebrow">Next · <span id="navMark">—</span></div>
+                  <div class="nav-dist mono" id="navDist">—</div>
+                </div>
+                <div class="nav-times">
+                  <div><label>Mark</label><b class="mono" id="navEtaMark">—</b></div>
+                  <div><label>Finish</label><b class="mono" id="navEtaFinish">—</b></div>
+                  <div><label>Race</label><b class="mono" id="navElapsed">—</b></div>
+                </div>
+                <button class="icon-btn" id="endRaceBtn" title="End race">
+                  <svg viewBox="0 0 24 24" width="14" height="14"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" /></svg>
+                </button>
+              </div>
+              <div class="nav-advice" id="navAdvice">
+                <div class="nav-action" id="navAction">—</div>
+                <div class="nav-detail" id="navDetail"></div>
+              </div>
+              <div class="nav-bottom">
+                <span id="navSteer">—</span>
+                <span id="navPerf"></span>
+              </div>
+            </div>
+
+            <div class="card stage">
+              <canvas id="boatCanvas"></canvas>
+              <div class="speed-hud">
+                <div class="speed" id="speedVal">0.0</div>
+                <div class="unit">knots</div>
+              </div>
+              <div class="stage-legend">
+                <span><i class="dot wind"></i>True</span>
+                <span><i class="dot apparent"></i>Apparent</span>
+              </div>
+              <div class="stage-actions">
+                <button class="icon-btn" id="sailBtn" title="Sail on the map (time-lapse ×60)">
+                  <svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 5l12 7-12 7z" fill="currentColor" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="stats">
+              <div class="stat"><label>TWA</label><b id="stTwa">—</b></div>
+              <div class="stat"><label>AWA</label><b id="stAwa">—</b></div>
+              <div class="stat"><label>AWS</label><b id="stAws">—</b></div>
+              <div class="stat"><label>VMG</label><b id="stVmg">—</b></div>
+              <div class="stat"><label>Heel</label><b id="stHeel">—</b></div>
+            </div>
+
+            <div class="card controls">
+              <div class="control">
+                <div class="control-head">
+                  <label for="heading">Heading</label>
+                  <span class="point-of-sail" id="pointOfSail"></span>
+                  <output id="headingVal">0°</output>
+                </div>
+                <div class="control-row">
+                  <input type="range" id="heading" min="0" max="359" step="1" value="0" />
+                  <button class="btn ghost small" id="tackBtn" title="Tack / gybe (T)">Tack</button>
+                </div>
+              </div>
+              <div class="control">
+                <div class="control-head">
+                  <label for="main">Mainsheet</label>
+                  <span class="pill" id="mainStatus"></span>
+                  <output id="mainVal">0°</output>
+                </div>
+                <input type="range" id="main" min="0" max="90" step="1" value="30" />
+                <div class="scale"><span>sheeted in</span><span>eased out</span></div>
+              </div>
+              <div class="control">
+                <div class="control-head">
+                  <label for="jib">Jib sheet</label>
+                  <span class="pill" id="jibStatus"></span>
+                  <output id="jibVal">0°</output>
+                </div>
+                <input type="range" id="jib" min="0" max="90" step="1" value="30" />
+              </div>
+              <div class="control-actions">
+                <button class="btn primary" id="autoTrimBtn">
+                  <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M12 3l2.2 5.3L20 9l-4.4 3.8L17 18.5 12 15.6 7 18.5l1.4-5.7L4 9l5.8-.7z" fill="currentColor" /></svg>
+                  Auto-trim
+                </button>
+                <label class="switch"><input type="checkbox" id="lockTrim" /><span></span>Keep trimmed</label>
+              </div>
+            </div>
+
+            <div class="card polar-card">
+              <div class="card-title">Polar diagram <span class="muted" id="polarTws"></span></div>
+              <canvas id="polarCanvas"></canvas>
+              <div class="polar-notes" id="polarNotes"></div>
+            </div>
+          </div>
+
+          <div class="tab hidden" id="tab-plan">
+            <div class="card">
+              <div class="card-title">Course to make good</div>
+              <div class="control">
+                <div class="control-head">
+                  <label for="course">Bearing</label>
+                  <output id="courseVal">0°</output>
+                </div>
+                <input type="range" id="course" min="0" max="359" step="1" value="0" />
+              </div>
+              <div id="courseResult"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">
+                Race track
+                <span class="muted" id="trackTotal"></span>
+                <span class="spacer"></span>
+                <button class="btn ghost small" id="raceBtn" disabled>Simulate</button>
+                <button class="btn primary small" id="startRaceBtn" disabled>
+                  <svg viewBox="0 0 24 24" width="13" height="13"><path d="M5 3v18M5 4h11l-2 4 2 4H5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" /></svg>
+                  Race
+                </button>
+                <button class="btn ghost small" id="clearTrackBtn" disabled>Clear</button>
+              </div>
+              <div id="legs"></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title">Safety <span class="muted" id="chartStatus"></span></div>
+              <div class="control">
+                <div class="control-head">
+                  <label for="draft">Draft</label>
+                  <output id="draftVal">1.5 m</output>
+                </div>
+                <input type="range" id="draft" min="0.3" max="4" step="0.1" value="1.5" />
+              </div>
+              <div class="control">
+                <div class="control-head">
+                  <label for="clearance">Keep off the shore</label>
+                  <output id="clearanceVal">40 m</output>
+                </div>
+                <input type="range" id="clearance" min="0" max="200" step="10" value="40" />
+              </div>
+              <p class="safety-note">
+                Routes and race calls steer clear of land (OpenStreetMap) and of water shallower than your draft + 0.5 m
+                (EMODnet depths, European seas only — lakes have no depth data, so the shore margin is all you get there).
+                Red on the map is too shallow, amber is too close to shore. Not a nautical chart: keep a lookout.
+              </p>
+            </div>
+          </div>
+        </section>
+      </main>
+      <div class="toast" id="toast" role="status"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
