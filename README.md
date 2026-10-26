@@ -32,14 +32,15 @@ npm test        # physics, navigator and routing unit tests
 npm run build   # static site in dist/
 ```
 
-## Deploy to Cloudflare Pages
+## Deploy to Cloudflare Workers
 
-It's a static site with no server code, live at **https://sailwing.burso.eu**.
+It's a static site with no server code, served as Worker static assets at **https://sailwing.burso.eu** (also https://sailwing.burso.workers.dev).
 
-- **GitHub Actions** (`.github/workflows/deploy.yml`): every push to `main` is tested, built and deployed to production. Pull requests get a preview URL. The first run creates the `sailwing` Pages project and attaches the custom domain.
-  - Repo secrets: `CLOUDFLARE_API_TOKEN` (permission *Account → Cloudflare Pages → Edit*) and `CLOUDFLARE_ACCOUNT_ID`.
-  - DNS: in the `burso.eu` zone, add a proxied `CNAME sailwing → sailwing.pages.dev`. If the zone is on the same Cloudflare account, the dashboard may offer to create it for you.
-- **CLI:** `npm run deploy` (runs `wrangler pages deploy dist` using `wrangler.toml`).
+- **Cloudflare Git integration** (Workers Builds): every push to `main` is built and deployed with `npx wrangler deploy`. Other branches get preview versions.
+  - Build command: `npm run build`. Deploy command: `npx wrangler deploy`.
+  - The `routes` entry in `wrangler.toml` attaches `sailwing.burso.eu` as a custom domain and creates its DNS record on deploy. The `burso.eu` zone must be on the same Cloudflare account, and the name must not already have a DNS record (delete any old `CNAME sailwing`).
+- **GitHub Actions** (`.github/workflows/deploy.yml`): runs tests and the build on pushes and pull requests. It doesn't deploy.
+- **CLI:** `npm run deploy` (builds, then runs `wrangler deploy` using `wrangler.toml`).
 
 `public/_headers` sets long-lived caching for hashed assets.
 

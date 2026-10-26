@@ -1,6 +1,12 @@
-# Cloudflare Pages project config (static site, no Functions).
-# Deployed by .github/workflows/deploy.yml to https://sailwing.burso.eu,
+# Cloudflare Worker serving the static site (assets only, no Worker script).
+# Deployed by Cloudflare's Git integration on every push to main,
 # or manually with `npm run deploy`.
 name = "sailwing"
-pages_build_output_dir = "dist"
 compatibility_date = "2026-10-01"
+
+# Production domain. `wrangler deploy` attaches it and creates the DNS record
+# (the burso.eu zone must be on the same Cloudflare account).
+routes = [{ pattern = "sailwing.burso.eu", custom_domain = true }]
+
+[assets]
+directory = "dist"
