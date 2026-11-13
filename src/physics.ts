@@ -252,7 +252,9 @@ export function polarLookup(pts: PolarPoint[], twa: number): PolarPoint {
 export interface Board {
   heading: number;
   twa: number; // signed
-  speed: number;
+  speed: number; // kn through the water
+  cog: number; // course over the ground: the heading plus any current
+  sog: number; // kn over the ground
   trim: Trim;
   fraction: number; // share of leg time
 }
@@ -267,11 +269,73 @@ export interface CoursePlan {
   pair?: { boards: [Board, Board]; vmc: number }; // best two-board option, even if not chosen
 }
 
+// shortcut: one uniform current for the whole race area (the ocean model behind it has ~8 km cells);
+// make it a field looked up by position if a finer source turns up.
+let set = { speed: 0, dir: 0, e: 0, n: 0 };
+/** The water's own motion: `speed` kn towards `dir`. Every plan after this is made over the ground. */
+export function setCurrent(speed: number, dir: number) {
+  set = { speed, dir, e: speed * Math.sin(dir * DEG), n: speed * Math.cos(dir * DEG) };
+}
+export const current = (): { speed: number; dir: number } => set;
+
+/** The wind the boat sails in: the true (ground) wind as felt on the moving water. */
+export function waterWind(tws: number, twd: number): { speed: number; dir: number } {
+  if (!set.speed) return { speed: tws, dir: twd };
+  const e = -tws * Math.sin(twd * DEG) - set.e;
+  const n = -tws * Math.cos(twd * DEG) - set.n;
+  return { speed: Math.hypot(e, n), dir: norm360(Math.atan2(-e, -n) / DEG) };
+}
+
+function makeBoard(pts: PolarPoint[], twd: number, heading: number, fraction: number): Board {
+  const twa = norm180(twd - heading);
+  const p = polarLookup(pts, twa);
+  const b = { heading: norm360(heading), twa, speed: p.speed, trim: p.trim, fraction };
+  if (!set.speed) return { ...b, cog: b.heading, sog: p.speed };
+  const e = p.speed * Math.sin(heading * DEG) + set.e;
+  const n = p.speed * Math.cos(heading * DEG) + set.n;
+  return { ...b, cog: norm360(Math.atan2(e, n) / DEG), sog: Math.hypot(e, n) };
+}
+
+/** Speed (kn) board `b` makes good over the ground along `brg`; negative if the current sets it back. */
+export const madeGood = (b: Board, brg: number) => b.sog * Math.cos((b.cog - brg) * DEG);
+
+/** The board that tracks straight along `bearing` over the ground, crabbing into any current. */
+export function directBoard(tws: number, twd: number, bearing: number): Board {
+  const pts = polar(tws);
+  if (!set.speed) return makeBoard(pts, twd, bearing, 1);
+  const cross = (rel: number) => {
+    const b = makeBoard(pts, twd, bearing + rel, 1);
+    return b.sog * Math.sin((b.cog - bearing) * DEG);
+  };
+  // Of the headings with no cross-track drift, the one making the most way.
+  let best = makeBoard(pts, twd, bearing, 1);
+  let bestV = -Infinity;
+  for (let rel = -180, c0 = cross(-180); rel < 180; rel++) {
+    const c1 = cross(rel + 1);
+    if (c0 === 0 || c0 * c1 < 0) {
+      const b = makeBoard(pts, twd, bearing + rel + (c0 === 0 ? 0 : c0 / (c0 - c1)), 1);
+      if (madeGood(b, bearing) > bestV) [best, bestV] = [b, madeGood(b, bearing)];
+    }
+    c0 = c1;
+  }
+  return best;
+}
+
 /** Seconds lost per manoeuvre (slowing down, turning, rebuilding speed). */
 export const MANOEUVRE_LOSS = { tack: 10, gybe: 6 };
 
 export const manoeuvreKind = (a: Board, b: Board) =>
   Math.abs(a.twa) > 90 && Math.abs(b.twa) > 90 ? 'gybe' : 'tack';
+
+/** Seconds to spend on each of two boards to cover `dist` m on `brg`: solves D = t1·v1 + t2·v2. */
+export function boardTimes(b1: Board, b2: Board, brg: number, dist: number): [number, number] {
+  const vel = (b: Board) => [Math.sin(b.cog * DEG) * b.sog * KN, Math.cos(b.cog * DEG) * b.sog * KN];
+  const [dx, dy] = [Math.sin(brg * DEG) * dist, Math.cos(brg * DEG) * dist];
+  const [ax, ay] = vel(b1);
+  const [bx, by] = vel(b2);
+  const det = ax * by - ay * bx;
+  return [(dx * by - dy * bx) / det, (ax * dy - ay * dx) / det];
+}
 
 /**
  * Fastest way to make good a bearing: sail it directly or split into two boards.
@@ -280,19 +344,15 @@ export const manoeuvreKind = (a: Board, b: Board) =>
  */
 export function planCourse(tws: number, twd: number, bearing: number, distance?: number): CoursePlan {
   const pts = polar(tws);
-  const board = (heading: number, fraction: number): Board => {
-    const twa = norm180(twd - heading);
-    const p = polarLookup(pts, twa);
-    return { heading: norm360(heading), twa, speed: p.speed, trim: p.trim, fraction };
-  };
-  const direct = board(bearing, 1);
-  let best: CoursePlan = { bearing, strategy: 'direct', boards: [direct], vmc: direct.speed, loss: 0, direct };
+  const board = (heading: number, fraction: number) => makeBoard(pts, twd, heading, fraction);
+  const direct = directBoard(tws, twd, bearing);
+  let best: CoursePlan = { bearing, strategy: 'direct', boards: [direct], vmc: madeGood(direct, bearing), loss: 0, direct };
 
   // Velocity components along (a) and across (c) the bearing, per relative heading.
   const comps: { rel: number; a: number; c: number }[] = [];
   for (let rel = -179; rel <= 180; rel++) {
-    const s = board(bearing + rel, 1).speed;
-    comps.push({ rel, a: s * Math.cos(rel * DEG), c: s * Math.sin(rel * DEG) });
+    const b = board(bearing + rel, 1);
+    comps.push({ rel, a: madeGood(b, bearing), c: b.sog * Math.sin((b.cog - bearing) * DEG) });
   }
   const left = comps.filter((x) => x.c < -1e-6);
   const right = comps.filter((x) => x.c > 1e-6);

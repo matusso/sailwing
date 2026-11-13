@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { Chart, boundsAround, emptyGrid, fillPolygon, parseDepthGrid, strokeLine, type ChartGrid } from './chart';
 import { findRoute, nextWaypoint, routeLeg, sailLeg } from './route';
 import { advise } from './nav';
 import { distance, offset, type LatLng } from './geo';
-import { KN, norm180, polar, polarLookup } from './physics';
+import { KN, current, norm180, planCourse, polar, polarLookup, setCurrent } from './physics';
 
 const start = { lat: 45.8, lng: 10.85 };
 const safety = { draft: 1.5, clearance: 40 };
@@ -30,6 +30,8 @@ function paint(g: ChartGrid, x0: number, y0: number, x1: number, y1: number, wha
 }
 const east = (m: number, from: LatLng = start) => offset(from, 90, m);
 const north = (m: number, from: LatLng = start) => offset(from, 0, m);
+
+afterEach(() => setCurrent(0, 0));
 
 describe('Chart', () => {
   it('flags land, shallows and the shore margin', () => {
@@ -65,6 +67,42 @@ describe('Chart', () => {
     expect(c.hazardAt(east(-350))).toBeNull();
     c.setSafety({ draft: 2.2, clearance: 40 });
     expect(c.hazardAt(east(-350))).toBe('shallow');
+  });
+});
+
+describe('tide', () => {
+  it('floats the boat over a shoal at high water', () => {
+    const g = sea();
+    paint(g, -400, -100, -300, 100, 1.2);
+    const c = new Chart(g, safety);
+    expect(c.clear(start, east(-600))).toBe(false);
+    c.setTide(1.5);
+    expect(c.hazardAt(east(-350))).toBeNull();
+    expect(c.depthAt(east(-350))).toBeCloseTo(2.7);
+    expect(c.clear(start, east(-600))).toBe(true);
+  });
+});
+
+describe('current', () => {
+  it('carries the boat: fair tide is faster, foul slower, across means crabbing', () => {
+    const still = planCourse(12, 0, 0).vmc;
+    setCurrent(1, 0);
+    expect(planCourse(12, 0, 0).vmc).toBeCloseTo(still + 1, 1);
+    setCurrent(1, 180);
+    expect(planCourse(12, 0, 0).vmc).toBeCloseTo(still - 1, 1);
+    setCurrent(1, 90); // setting east while reaching north in a westerly
+    const d = planCourse(12, 270, 0).direct;
+    expect(Math.abs(norm180(d.cog))).toBeLessThan(0.5);
+    expect(norm180(d.heading)).toBeLessThan(-3); // pointing up-current
+  });
+
+  it('times a leg over the ground', () => {
+    const to = north(1500);
+    const slack = sailLeg(null, start, to, 12, 0).time;
+    setCurrent(1, 0);
+    const fair = sailLeg(null, start, to, 12, 0);
+    expect(fair.time).toBeLessThan(slack * 0.85);
+    expect(distance(fair.path[fair.path.length - 1], to)).toBe(0);
   });
 });
 
@@ -122,7 +160,74 @@ describe('findRoute', () => {
   });
 });
 
+describe('findRoute in tight water', () => {
+  it('stands off the shore where there is room to', () => {
+    const g = sea();
+    paint(g, 500, -300, 900, 600, 'land');
+    const c = new Chart(g, safety);
+    const to = east(1500);
+    const r = findRoute(c, start, to, 12, 0)!;
+    // Every piece keeps twice the margin: nothing forces the boat closer here.
+    for (let n = 1; n < r.length; n++) expect(c.clear(r[n - 1], r[n], [], -safety.clearance)).toBe(true);
+  });
+
+  it('beats up the wide channel rather than the narrow one nearer the rhumb line', () => {
+    // 600 m of land across the course with a 160 m channel close by and a 450 m one further off.
+    const g = sea();
+    paint(g, -2100, 500, -700, 1100, 'land');
+    paint(g, -250, 500, 150, 1100, 'land');
+    paint(g, 310, 500, 2100, 1100, 'land');
+    const c = new Chart(g, { draft: 1.5, clearance: 20 });
+    const to = north(1500);
+    const x = (p: LatLng) => (p.lng - start.lng) * 111195 * Math.cos(start.lat * (Math.PI / 180));
+    const xs = (twd: number) => routeLeg(c, start, to, 12, twd).waypoints.map(x);
+    expect(Math.min(...xs(0))).toBeLessThan(-250);
+    // Reaching, there is nothing to tack for: the short way through the narrow one.
+    expect(Math.min(...xs(90))).toBeGreaterThan(-250);
+  });
+});
+
+describe('routeLeg', () => {
+  // The rhumb line runs up a 120 m channel 800 m long; a 400 m wide one lies a little to the east.
+  const channels = () => {
+    const g = sea();
+    paint(g, -2100, 500, -60, 1300, 'land');
+    paint(g, 60, 500, 200, 1300, 'land');
+    paint(g, 600, 500, 2100, 1300, 'land');
+    return new Chart(g, { draft: 1.5, clearance: 20 });
+  };
+  const x = (p: LatLng) => (p.lng - start.lng) * 111195 * Math.cos(start.lat * (Math.PI / 180));
+
+  it('leaves a clear straight line for a faster way round when beating', () => {
+    const c = channels();
+    const to = north(1800);
+    expect(c.clear(start, to)).toBe(true);
+    const leg = routeLeg(c, start, to, 12, 0);
+    expect(Math.max(...leg.waypoints.map(x))).toBeGreaterThan(200);
+    expect(leg.time).toBeLessThan(sailLeg(c, start, to, 12, 0).time);
+  });
+
+  it('keeps the straight line when nothing is faster', () => {
+    const c = channels();
+    expect(routeLeg(c, start, north(1800), 12, 90).waypoints).toHaveLength(2); // a reach: no tacks to save
+    expect(routeLeg(new Chart(sea(), safety), start, north(1800), 12, 0).waypoints).toHaveLength(2); // open water
+  });
+});
+
 describe('sailLeg', () => {
+  it('holds long boards where the water is wide and short ones only where it is narrow', () => {
+    // Beat 1.6 km north: open water at first, then a 300 m channel for the last 500 m.
+    const g = sea();
+    paint(g, -2000, 1100, -150, 2000, 'land');
+    paint(g, 150, 1100, 2000, 2000, 'land');
+    const c = new Chart(g, { draft: 1.5, clearance: 20 });
+    const to = north(1600);
+    const leg = sailLeg(c, start, to, 12, 0);
+    expect(leg.tight).toBe(false);
+    for (let n = 1; n < leg.path.length; n++) expect(c.clear(leg.path[n - 1], leg.path[n], [start, to])).toBe(true);
+    expect(leg.manoeuvres).toBeLessThanOrEqual(sailLeg(c, north(1100), to, 12, 0).manoeuvres + 1);
+  });
+
   it('puts the tack on the side that has water', () => {
     // Beat 1 km north with land 150 m to the west: the corner must go out east.
     const g = sea();
@@ -194,19 +299,23 @@ describe('racing a course with land and shallows in the way', () => {
     let wp = 1;
     let pos = from;
     let heading = 0;
+    let turns = -1; // the first "turn" is just bearing away from head to wind
     for (let t = 0; t < 3 * 3600; t += 2) {
-      if (distance(pos, to) < 30) return { arrived: true, aground: false };
+      if (distance(pos, to) < 30) return { arrived: true, aground: false, turns };
       const next = nextWaypoint(c, pos, route, wp, to);
       wp = next.wp;
       if (next.lost) {
         const r = findRoute(c, pos, to, 12, twd);
         if (r) [route, wp] = [r, 1];
       }
-      heading = advise(pos, heading, 12, twd, route[wp], c, [to]).board.heading;
+      const h = advise(pos, heading, 12, twd, route[wp], c, [to]).board.heading;
+      if (Math.sign(norm180(twd - h) || 1) !== Math.sign(norm180(twd - heading) || 1)) turns++;
+      heading = h;
       pos = offset(pos, heading, polarLookup(pts, norm180(twd - heading)).speed * KN * 2);
-      if (c.hazardAt(pos) && distance(pos, to) > 50) return { arrived: false, aground: true };
+      pos = offset(pos, current().dir, current().speed * KN * 2);
+      if (c.hazardAt(pos) && distance(pos, to) > 50) return { arrived: false, aground: true, turns };
     }
-    return { arrived: false, aground: false };
+    return { arrived: false, aground: false, turns };
   }
 
   it('gets round in any wind', () => {
@@ -217,7 +326,30 @@ describe('racing a course with land and shallows in the way', () => {
     const from = offset(start, 200, 300);
     const to = offset(start, 70, 1700);
     for (const twd of [0, 45, 90, 135, 180, 225, 270, 315]) {
-      expect({ twd, ...race(c, from, to, twd) }).toEqual({ twd, arrived: true, aground: false });
+      expect({ twd, ...race(c, from, to, twd) }).toMatchObject({ twd, arrived: true, aground: false });
     }
+  });
+
+  it('gets round in a cross current too', () => {
+    const g = sea();
+    paint(g, 400, -500, 800, 300, 'land');
+    const c = new Chart(g, safety);
+    const from = offset(start, 200, 300);
+    const to = offset(start, 70, 1700);
+    setCurrent(1, 160);
+    for (const twd of [0, 90, 180, 270]) {
+      expect({ twd, ...race(c, from, to, twd) }).toMatchObject({ twd, arrived: true, aground: false });
+    }
+  });
+
+  it('beats into a channel on as few tacks as the planner promised', () => {
+    const g = sea();
+    paint(g, -2000, 1100, -150, 2000, 'land');
+    paint(g, 150, 1100, 2000, 2000, 'land');
+    const c = new Chart(g, { draft: 1.5, clearance: 20 });
+    const to = north(1600);
+    const r = race(c, start, to, 0);
+    expect(r).toMatchObject({ arrived: true, aground: false });
+    expect(r.turns).toBeLessThanOrEqual(sailLeg(c, start, to, 12, 0).manoeuvres + 1);
   });
 });
