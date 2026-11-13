@@ -5,12 +5,15 @@ import { drawPolar } from './polarView';
 import {
   KN,
   MANOEUVRE_LOSS,
+  current,
   norm180,
   norm360,
   optimizeTrim,
   planCourse,
   polar,
+  setCurrent,
   simulate,
+  waterWind,
   type Board,
   type CoursePlan,
   type SailState,
@@ -18,6 +21,7 @@ import {
 } from './physics';
 import { NM, bearing, compassName, distance, offset, type LatLng } from './geo';
 import { fetchWind } from './wind';
+import { fetchWater } from './water';
 import { Gps, type Fix } from './gps';
 import { PREPARE_S, advise, steerHint, type Advice } from './nav';
 import { boundsAround, loadChart, type Chart, type Safety } from './chart';
@@ -71,6 +75,12 @@ interface Race {
   rerouteAt: number; // earliest time (ms) to re-plan after losing sight of the route
   hazardWarned: boolean;
 }
+
+/** The wind the boat sails in: the true wind as felt on the moving water. Plans and trim all use this. */
+const sailWind = () => waterWind(state.wind.speed, state.wind.dir);
+/** Where the boat is `dt` s later on `heading` at `speed` kn through the water, carried by the current. */
+const sailed = (p: LatLng, heading: number, speed: number, dt: number) =>
+  offset(offset(p, heading, speed * KN * dt), current().dir, current().speed * KN * dt);
 
 let legs: Leg[] = [];
 let race: Race | null = null;
@@ -201,7 +211,7 @@ const mapView = new MapView($('map'), state.boat, {
 const boatView = new BoatView($<HTMLCanvasElement>('boatCanvas'));
 
 function refreshBoat() {
-  const { speed: tws, dir: twd } = state.wind;
+  const { speed: tws, dir: twd } = sailWind();
   const twa = norm180(twd - state.heading);
   const best = optimizeTrim(tws, twa).trim;
   if (state.lockTrim) state.trim = best;
@@ -241,7 +251,7 @@ function refreshBoat() {
     el.dataset.status = s.status;
   }
 
-  $('topWind').textContent = `${state.wind.speed.toFixed(1)} kn ${compassName(twd)}`;
+  $('topWind').textContent = `${state.wind.speed.toFixed(1)} kn ${compassName(state.wind.dir)}`;
   $('topBoat').textContent = `${sim.speed.toFixed(1)} kn · ${deg(state.heading)}`;
 
   if (!$('tab-trim').classList.contains('hidden')) {
@@ -276,6 +286,7 @@ function setWind(speed: number, dir: number, source = 'Manual') {
 
 let windAbort: AbortController | null = null;
 async function loadLiveWind(p: LatLng, quiet = false) {
+  loadWater(p);
   windAbort?.abort();
   windAbort = new AbortController();
   const btn = $<HTMLButtonElement>('liveWindBtn');
@@ -289,6 +300,35 @@ async function loadLiveWind(p: LatLng, quiet = false) {
   } finally {
     btn.classList.remove('loading');
   }
+}
+
+let waterAbort: AbortController | null = null;
+let tide = 0;
+/** Current and tide for the spot: they move the boat and change what's deep enough, so everything is re-planned. */
+async function loadWater(p: LatLng) {
+  waterAbort?.abort();
+  const abort = (waterAbort = new AbortController());
+  let text = 'No current or tide data';
+  try {
+    const w = await fetchWater(p, abort.signal);
+    setCurrent(w.current?.speed ?? 0, w.current?.dir ?? 0);
+    tide = w.tide?.height ?? 0;
+    const parts = [
+      w.current && `Current ${w.current.speed.toFixed(1)} kn → ${compassName(w.current.dir)}`,
+      w.tide && `tide ${w.tide.height >= 0 ? '+' : ''}${w.tide.height.toFixed(1)} m (${w.tide.station})`,
+    ].filter(Boolean);
+    if (parts.length) text = parts.join(' · ');
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') return;
+    setCurrent(0, 0);
+    tide = 0;
+  }
+  $('waterVal').textContent = text;
+  chart?.setTide(tide);
+  routeCache.clear();
+  drawChart();
+  refreshBoat();
+  schedulePlan();
 }
 
 windSpeedEl.addEventListener('input', () => setWind(Number(windSpeedEl.value), state.wind.dir));
@@ -417,11 +457,11 @@ for (const key of ['main', 'jib'] as const) {
     }),
   );
 }
-const tack = () => userSteer(() => (state.heading = norm360(2 * state.wind.dir - state.heading)));
+const tack = () => userSteer(() => (state.heading = norm360(2 * sailWind().dir - state.heading)));
 $('tackBtn').addEventListener('click', tack);
 
 function autoTrim() {
-  userSteer(() => (state.trim = optimizeTrim(state.wind.speed, norm180(state.wind.dir - state.heading)).trim));
+  userSteer(() => (state.trim = optimizeTrim(sailWind().speed, norm180(sailWind().dir - state.heading)).trim));
 }
 $('autoTrimBtn').addEventListener('click', autoTrim);
 
@@ -538,6 +578,7 @@ async function refreshChart() {
 
 function setChart(c: Chart | null) {
   chart = c;
+  chart?.setTide(tide);
   routeCache.clear();
   drawChart();
   schedulePlan();
@@ -569,7 +610,7 @@ for (const key of ['draft', 'clearance'] as const) {
 }
 
 function routed(from: LatLng, to: LatLng): RoutedLeg {
-  const { speed: tws, dir: twd } = state.wind;
+  const { speed: tws, dir: twd } = sailWind();
   const key = `${from.lat},${from.lng},${to.lat},${to.lng},${tws},${twd},${chart?.version ?? 0}`;
   let r = routeCache.get(key);
   if (!r) {
@@ -636,7 +677,7 @@ function markName(i: number) {
 }
 
 function refreshPlan() {
-  const { speed: tws, dir: twd } = state.wind;
+  const { speed: tws, dir: twd } = sailWind();
   const course = planCourse(tws, twd, state.course);
   setRange($<HTMLInputElement>('course'), state.course);
   $('courseVal').textContent = deg(state.course);
@@ -760,7 +801,7 @@ function startRace(mode: Race['mode']) {
   setLock(true);
   if (mode === 'sim') {
     state.boat = state.marks[0];
-    const a = advise(state.boat, state.heading, state.wind.speed, state.wind.dir, navTarget(state.marks[1]), chart, [state.marks[1]]);
+    const a = advise(state.boat, state.heading, sailWind().speed, sailWind().dir, navTarget(state.marks[1]), chart, [state.marks[1]]);
     state.heading = a.board.heading;
     mapView.fitTo(state.marks);
   } else {
@@ -832,7 +873,7 @@ function navTarget(mark: LatLng): LatLng {
   const now = performance.now();
   if (next.lost && now >= race.rerouteAt) {
     race.rerouteAt = now + 1000;
-    const r = findRoute(chart, state.boat, mark, state.wind.speed, state.wind.dir);
+    const r = findRoute(chart, state.boat, mark, sailWind().speed, sailWind().dir);
     if (r) {
       race.route = r;
       race.wp = 1;
@@ -845,11 +886,12 @@ function navTarget(mark: LatLng): LatLng {
 let restMemo = { key: '', time: 0 };
 function routeRest(k: number): number {
   if (!race) return 0;
-  const key = `${race.route.map((p) => `${p.lat},${p.lng}`).join(';')}|${k}|${state.wind.speed}|${state.wind.dir}|${chart?.version}`;
+  const { speed: tws, dir: twd } = sailWind();
+  const key = `${race.route.map((p) => `${p.lat},${p.lng}`).join(';')}|${k}|${tws}|${twd}|${current().speed}|${current().dir}|${chart?.version}`;
   if (restMemo.key !== key) {
     let time = 0;
     for (let n = k; n + 1 < race.route.length; n++) {
-      time += sailLeg(chart, race.route[n], race.route[n + 1], state.wind.speed, state.wind.dir, [race.route[race.route.length - 1]]).time;
+      time += sailLeg(chart, race.route[n], race.route[n + 1], tws, twd, [race.route[race.route.length - 1]]).time;
     }
     restMemo = { key, time };
   }
@@ -875,7 +917,7 @@ function hazardAhead(speed: number) {
 /** Recompute the advice from the boat's current position and update the nav card + map overlay. */
 function refreshNav() {
   if (!race) return;
-  const { speed: tws, dir: twd } = state.wind;
+  const { speed: tws, dir: twd } = sailWind();
   const mark = state.marks[race.next];
   if (!mark) return endRace();
   const target = navTarget(mark);
@@ -997,14 +1039,14 @@ function tick(t: number) {
     race.elapsed += dt;
     // Autopilot follows the navigator; turning through the wind costs time.
     if (advice) {
-      const before = Math.sign(norm180(state.wind.dir - state.heading) || 1);
-      const after = Math.sign(norm180(state.wind.dir - advice.board.heading) || 1);
+      const before = Math.sign(norm180(sailWind().dir - state.heading) || 1);
+      const after = Math.sign(norm180(sailWind().dir - advice.board.heading) || 1);
       if (before !== after) race.penalty = MANOEUVRE_LOSS[Math.abs(advice.board.twa) > 90 ? 'gybe' : 'tack'];
       state.heading = advice.board.heading;
     }
     refreshBoat();
+    state.boat = sailed(state.boat, state.heading, race.penalty > 0 ? 0 : sim.speed, dt); // the current never stops
     if (race.penalty > 0) race.penalty -= dt;
-    else state.boat = offset(state.boat, state.heading, sim.speed * KN * dt);
     const hit = aground();
     if (hit) {
       const time = race.elapsed;
@@ -1017,7 +1059,7 @@ function tick(t: number) {
     const dt = dtReal * 60;
     if (race) race.elapsed += dt;
     const before = state.boat;
-    state.boat = offset(state.boat, state.heading, sim.speed * KN * dt);
+    state.boat = sailed(state.boat, state.heading, sim.speed, dt);
     const hit = aground();
     if (hit) {
       state.boat = before;
@@ -1043,7 +1085,7 @@ setMapMode('pick');
 mapView.setMarks(state.marks);
 setSafetyUi();
 ensureChart();
-state.trim = optimizeTrim(state.wind.speed, norm180(state.wind.dir - state.heading)).trim;
+state.trim = optimizeTrim(sailWind().speed, norm180(sailWind().dir - state.heading)).trim;
 setWind(state.wind.speed, state.wind.dir);
 if (state.marks.length > 1) mapView.fitTo(state.marks);
 loadLiveWind(state.boat);

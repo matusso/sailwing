@@ -18,6 +18,8 @@ Wind on the map, sails in your hands.
 - **Land and depth:** the planner and the race navigator keep the boat off land and out of water shallower than your draft + 0.5 m, plus a margin off the shore and shoals (set both under *Plan → Safety*). Legs are routed around islands, headlands and shoals, tacks are placed on the side that has water, and a narrow channel gets short tacks. While racing, the navigator steers for the next detour waypoint, re-plans if you stray, and warns (with vibration) about land or shallows on the bow. On the map, red is too shallow and amber is too close to shore.
   - Land: OpenStreetMap water polygons via [OpenFreeMap](https://openfreemap.org) vector tiles (worldwide, lakes included, piers count as land).
   - Depth: [EMODnet Bathymetry](https://emodnet.ec.europa.eu/en/bathymetry) (~115 m grid, European seas only). Lakes and other seas have no depth data, so there you only get the shore margin.
+  - Current: [Open-Meteo marine API](https://open-meteo.com/en/docs/marine-weather-api) surface current (~8 km model, one value for the whole course). Routes, tack calls, ETAs and the simulator all work over the ground.
+  - Tide: [Open Waters](https://openwaters.io/api/tides/) predictions for the nearest station within 50 km, above LAT (the datum EMODnet depths use). The lowest water of the next 3 hours is added to the charted depths.
   - This is not a nautical chart. Small rocks, moorings and anything newer than the data are missing, so keep a lookout.
 
 Keyboard: `←` / `→` steer (hold Shift for 10°), `T` tack or gybe, `A` auto-trim.

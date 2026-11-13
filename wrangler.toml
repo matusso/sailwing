@@ -10,3 +10,6 @@ routes = [{ pattern = "sailwing.burso.eu", custom_domain = true }]
 
 [assets]
 directory = "dist"
+
+# Required by `wrangler preview` (non-production branch builds). Empty is fine.
+[previews]

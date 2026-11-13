@@ -67,6 +67,7 @@
               <div class="eyebrow">True wind <span class="badge" id="windSource">Manual</span></div>
               <div class="wind-value"><span id="windSpeedVal">12</span><small>kn</small></div>
               <div class="wind-dir" id="windDirVal">from W · 270°</div>
+              <div class="wind-dir" id="waterVal" title="Surface current (Open-Meteo marine model) and tide (Open Waters). Models, not observations.">No current or tide data</div>
               <input type="range" id="windSpeed" min="0" max="35" step="0.5" value="12" aria-label="Wind speed" />
             </div>
           </div>
@@ -221,6 +222,8 @@
               <p class="safety-note">
                 Routes and race calls steer clear of land (OpenStreetMap) and of water shallower than your draft + 0.5 m
                 (EMODnet depths, European seas only — lakes have no depth data, so the shore margin is all you get there).
+                Where there is data, routes and timings also allow for the current (<a href="https://open-meteo.com/en/docs/marine-weather-api" target="_blank" rel="noopener">Open-Meteo</a> marine model, ~8 km)
+                and depths for the lowest tide of the next 3 hours (<a href="https://openwaters.io" target="_blank" rel="noopener">Open Waters</a>, nearest station within 50 km).
                 Red on the map is too shallow, amber is too close to shore. Not a nautical chart: keep a lookout.
               </p>
             </div>

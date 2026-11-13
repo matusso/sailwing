@@ -47,6 +47,8 @@ export class Chart {
   readonly hasDepth: boolean;
   /** Bumped whenever what counts as navigable changes. */
   version = 0;
+  /** Water (m) on top of the charted depths right now: the tide above chart datum. */
+  tide = 0;
   private shore: Float32Array; // m to the nearest land or shallow cell
   private kind: Uint8Array;
 
@@ -73,11 +75,17 @@ export class Chart {
     this.safety = s;
     const { water, depth } = this.g;
     for (let k = 0; k < this.kind.length; k++) {
-      this.kind[k] = !water[k] ? LAND : depth[k] < this.minDepth ? SHALLOW : OK;
+      this.kind[k] = !water[k] ? LAND : depth[k] + this.tide < this.minDepth ? SHALLOW : OK;
     }
     // The margin keeps off shoals too: the depth model is coarse right where it matters.
     this.shore = hazardDistance(this.g, this.kind, this.cellX, this.cellY);
     this.version++;
+  }
+
+  setTide(m: number) {
+    if (m === this.tide) return;
+    this.tide = m;
+    this.setSafety(this.safety);
   }
 
   contains(p: LatLng, margin = 0) {
@@ -102,7 +110,12 @@ export class Chart {
 
   depthAt(p: LatLng): number {
     const k = this.cell(p);
-    return k < 0 ? NaN : this.g.depth[k];
+    return k < 0 ? NaN : this.g.depth[k] + this.tide;
+  }
+
+  /** Metres from cell `k` to the nearest land or shallows. */
+  room(k: number): number {
+    return this.shore[k];
   }
 
   hazardAt(p: LatLng): Hazard | null {
@@ -142,7 +155,7 @@ export class Chart {
    * one-cell rock clipped at a corner is seen). `visit` gets the cell (-1 off the chart),
    * the point where the line enters it and the fraction of the way along; return true to stop.
    */
-  private walk(a: LatLng, b: LatLng, visit: (k: number, p: LatLng, t: number) => boolean | void): boolean {
+  walk(a: LatLng, b: LatLng, visit: (k: number, p: LatLng, t: number) => boolean | void): boolean {
     const { west, south, dLng, dLat, w, h } = this.g;
     const x0 = (a.lng - west) / dLng;
     const y0 = (a.lat - south) / dLat;
@@ -183,7 +196,7 @@ export class Chart {
     let hit: { dist: number; kind: Hazard; depth: number } | null = null;
     this.walk(a, b, (k, _p, t) => {
       if (k < 0 || this.kind[k] === OK) return false;
-      hit = { dist: len * t, kind: this.kind[k] === LAND ? 'land' : 'shallow', depth: this.g.depth[k] };
+      hit = { dist: len * t, kind: this.kind[k] === LAND ? 'land' : 'shallow', depth: this.g.depth[k] + this.tide };
       return true;
     });
     return hit;
