@@ -348,8 +348,8 @@ function loadTile(template: string, z: number, x: number, y: number) {
   return t;
 }
 
-const tileX = (lng: number, z: number) => ((lng + 180) / 360) * 2 ** z;
-const tileY = (lat: number, z: number) => ((1 - Math.log(Math.tan(lat * DEG) + 1 / Math.cos(lat * DEG)) / Math.PI) / 2) * 2 ** z;
+export const tileX = (lng: number, z: number) => ((lng + 180) / 360) * 2 ** z;
+export const tileY = (lat: number, z: number) => ((1 - Math.log(Math.tan(lat * DEG) + 1 / Math.cos(lat * DEG)) / Math.PI) / 2) * 2 ** z;
 
 /** Rasterise OSM water (and piers, as land) from vector tiles into the grid. */
 async function loadWater(g: ChartGrid, b: Bounds, signal?: AbortSignal) {

@@ -383,3 +383,28 @@ export function planCourse(tws: number, twd: number, bearing: number, distance?:
   }
   return best;
 }
+
+// ---------- hand-steering dynamics (3D simulator) ----------
+
+export interface Motion {
+  heading: number;
+  speed: number; // kn through the water
+  heel: number; // deg, signed: + = heeling to port (wind from starboard)
+}
+
+const INERTIA_S = 7; // time constant of the hull picking up or losing way
+/** Full-rudder turn rate, deg/s: bare steerage at rest, more with water over the rudder. */
+const turnRate = (speed: number) => Math.min(25, 3 + 4 * speed);
+
+/**
+ * One time step at the helm: the rudder (−1 hard to port … 1 hard to starboard) turns the boat,
+ * speed and heel lag behind their equilibrium, so the boat carries its way through a tack.
+ */
+export function stepMotion(m: Motion, rudder: number, tws: number, twd: number, trim: Trim, dt: number): Motion & { state: BoatState } {
+  const heading = norm360(m.heading + rudder * turnRate(m.speed) * dt);
+  // shortcut: sail forces are taken at the equilibrium speed, not the actual one; integrate forces() if that ever shows.
+  const state = simulate(tws, twd - heading, trim);
+  const lag = (tau: number) => 1 - Math.exp(-dt / tau);
+  const heel = state.heel * (state.awa < 0 ? -1 : 1);
+  return { heading, speed: m.speed + (state.speed - m.speed) * lag(INERTIA_S), heel: m.heel + (heel - m.heel) * lag(1.5), state };
+}
