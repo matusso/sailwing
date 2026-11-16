@@ -183,6 +183,7 @@ export class MapView {
   }
 
   private resize() {
+    this.map.invalidateSize(); // Leaflet only watches the window, and the pane is hidden while the 3D view is up
     const { clientWidth: w, clientHeight: h } = this.map.getContainer();
     const dpr = window.devicePixelRatio || 1;
     this.canvas.width = w * dpr;

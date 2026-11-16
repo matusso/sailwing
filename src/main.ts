@@ -13,8 +13,10 @@ import {
   polar,
   setCurrent,
   simulate,
+  stepMotion,
   waterWind,
   type Board,
+  type BoatState,
   type CoursePlan,
   type SailState,
   type Trim,
@@ -26,6 +28,7 @@ import { Gps, type Fix } from './gps';
 import { PREPARE_S, advise, steerHint, type Advice } from './nav';
 import { boundsAround, loadChart, type Chart, type Safety } from './chart';
 import { findRoute, nextWaypoint, routeLeg, sailLeg, type RoutedLeg } from './route';
+import type { Sim3D } from './sim3d'; // type only: three.js loads when the 3D view is first opened
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -325,6 +328,7 @@ async function loadWater(p: LatLng) {
   }
   $('waterVal').textContent = text;
   chart?.setTide(tide);
+  helm?.chart?.setTide(tide);
   routeCache.clear();
   drawChart();
   refreshBoat();
@@ -381,7 +385,7 @@ async function keepAwake(on: boolean) {
   }
 }
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && (gps.active || race?.mode === 'live')) keepAwake(true);
+  if (document.visibilityState === 'visible' && (gps.active || race?.mode === 'live' || helm)) keepAwake(true);
 });
 
 function setGpsUi(mode: 'off' | 'searching' | 'on') {
@@ -468,6 +472,7 @@ $('autoTrimBtn').addEventListener('click', autoTrim);
 function setLock(on: boolean) {
   state.lockTrim = on;
   $<HTMLInputElement>('lockTrim').checked = on;
+  $<HTMLInputElement>('simLock').checked = on;
 }
 $<HTMLInputElement>('lockTrim').addEventListener('change', (e) => {
   setLock((e.target as HTMLInputElement).checked);
@@ -483,6 +488,15 @@ $('sailBtn').addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (e) => {
+  if (helm) {
+    // At the wheel the arrows are the helm, even with a sheet slider focused.
+    if (e.key === 'ArrowLeft') helm.keys = -1;
+    else if (e.key === 'ArrowRight') helm.keys = 1;
+    else if (e.key === 'a' || e.key === 'A') setLock(!state.lockTrim);
+    else if (e.key === 'Escape') closeSim();
+    else return;
+    return e.preventDefault();
+  }
   const t = e.target as HTMLElement;
   if (t.tagName === 'INPUT' && (t as HTMLInputElement).type !== 'checkbox') return;
   const step = e.shiftKey ? 10 : 2;
@@ -995,6 +1009,161 @@ function refreshNav() {
   }">${pct}%</span>`;
 }
 
+// ---------- 3D simulator ----------
+
+const SIM_PAD = 5000; // m of coast loaded around the boat
+const SIM_RECENTRE = 1500; // reload once the boat is this far from the middle, before the edge shows through the haze
+const SIM_RATES = [1, 5, 20];
+
+let sim3d: Sim3D | null = null;
+/** Set while the captain is at the wheel. */
+let helm: {
+  speed: number; // kn through the water
+  heel: number;
+  rudder: number; // −1 … 1, eased towards what the keys or the drag ask for
+  keys: number;
+  drag: number | null;
+  rate: number;
+  chart: Chart | null; // the coast around the boat, independent of the race chart
+  loading: boolean;
+  retryAt: number;
+  hudDue: number;
+  windDue: number;
+} | null = null;
+
+async function openSim() {
+  if (helm) return;
+  if (gps.active) return toast('GPS is moving the boat — turn GPS off to sail in 3D');
+  stopMotion();
+  endRace();
+  const now = performance.now();
+  helm = { speed: 0, heel: 0, rudder: 0, keys: 0, drag: null, rate: 1, chart: null, loading: false, retryAt: 0, hudDue: 0, windDue: now + WIND_REFRESH_MS };
+  $('simRate').textContent = '×1';
+  $('sim3d').classList.remove('hidden');
+  $('simHint').classList.remove('gone');
+  window.setTimeout(() => $('simHint').classList.add('gone'), 6000);
+  document.body.classList.add('sim-on');
+  keepAwake(true);
+  try {
+    sim3d ??= new (await import('./sim3d')).Sim3D($<HTMLCanvasElement>('simCanvas'));
+  } catch (e) {
+    closeSim();
+    toast(`The 3D view needs WebGL: ${(e as Error).message}`, 'error');
+  }
+}
+
+function closeSim() {
+  if (!helm) return;
+  helm = null;
+  $('sim3d').classList.add('hidden');
+  document.body.classList.remove('sim-on');
+  if (!gps.active) keepAwake(false);
+  refreshBoat();
+  mapView.centerOn(state.boat, 0);
+  ensureChart();
+}
+
+async function loadSimWorld() {
+  const h = helm;
+  if (!h || !sim3d) return;
+  h.loading = true;
+  try {
+    const c = await loadChart(boundsAround([state.boat], SIM_PAD), state.safety);
+    c.setTide(tide);
+    await sim3d.setWorld(c, state.boat);
+    h.chart = c;
+  } catch (e) {
+    h.retryAt = performance.now() + 15000;
+    if (helm === h) toast(`Couldn't load the coast around you: ${(e as Error).message}`, 'error');
+  }
+  h.loading = false;
+}
+
+function stepSim(dtReal: number, t: number) {
+  const h = helm!;
+  if (!sim3d) return; // three.js still loading
+  const { speed: tws, dir: twd } = sailWind();
+  h.rudder += ((h.drag ?? h.keys) - h.rudder) * Math.min(1, dtReal * 6);
+  const dt = dtReal * h.rate;
+  if (state.lockTrim) state.trim = optimizeTrim(tws, norm180(twd - state.heading)).trim;
+  const m = stepMotion({ heading: state.heading, speed: h.speed, heel: h.heel }, h.rudder, tws, twd, state.trim, dt);
+  state.heading = m.heading;
+  h.speed = m.speed;
+  h.heel = m.heel;
+  const before = state.boat;
+  state.boat = sailed(before, m.heading, m.speed, dt);
+  const hit = h.chart?.hazardAt(state.boat);
+  if (hit) {
+    state.boat = before;
+    if (h.speed > 0.5) {
+      navigator.vibrate?.(200);
+      toast(`Aground! ${hit === 'land' ? 'That was the shore' : 'Too shallow for your draft'} — turn the wheel and sail off`, 'error');
+    }
+    h.speed = 0;
+  }
+  if (!h.loading && t > h.retryAt && (!h.chart || !h.chart.contains(state.boat, SIM_PAD - SIM_RECENTRE))) loadSimWorld();
+  // Real weather keeps up with the boat, unless the wind was set by hand.
+  if (t > h.windDue) {
+    h.windDue = t + WIND_REFRESH_MS;
+    if ($('windSource').textContent !== 'Manual') loadLiveWind(state.boat, true);
+  }
+  sim3d.draw({ pos: state.boat, heading: m.heading, heel: m.heel, rudder: h.rudder, trim: state.trim, state: m.state, tws, twd }, t / 1000);
+  if (t > h.hudDue) {
+    h.hudDue = t + 200;
+    simHud(m.state, tws, twd);
+  }
+}
+
+function simHud(s: BoatState, tws: number, twd: number) {
+  const h = helm!;
+  $('simSpeed').textContent = h.speed.toFixed(1);
+  $('simHeading').textContent = `${deg(state.heading)} ${compassName(state.heading)}`;
+  $('simWind').textContent = tws < 0.5 ? 'No wind' : `${tws.toFixed(0)} kn ${compassName(twd)} · ${pointOfSail(s.twa)}`;
+  const d = h.chart?.depthAt(state.boat) ?? NaN;
+  $('simDepth').textContent = !h.chart ? 'Loading the coast…' : isNaN(d) ? 'Depth uncharted' : `Depth ${d.toFixed(d < 10 ? 1 : 0)} m`;
+  $('simDepth').classList.toggle('warn', !!h.chart && d < h.chart.minDepth + 2);
+  $('simVane').style.transform = `rotate(${s.awa}deg)`;
+  for (const [key, id] of [['main', 'simMain'], ['jib', 'simJib']] as const) {
+    setRange($<HTMLInputElement>(id), state.trim[key]);
+    $(`${id}Val`).textContent = `${state.trim[key]}°`;
+    $(`${id}Status`).textContent = STATUS_TEXT[s[key].status];
+    $(`${id}Status`).dataset.status = s[key].status;
+  }
+}
+
+$('simBtn').addEventListener('click', openSim);
+$('simExit').addEventListener('click', closeSim);
+$('simRate').addEventListener('click', () => {
+  if (!helm) return;
+  helm.rate = SIM_RATES[(SIM_RATES.indexOf(helm.rate) + 1) % SIM_RATES.length];
+  $('simRate').textContent = `×${helm.rate}`;
+});
+$<HTMLInputElement>('simLock').addEventListener('change', (e) => setLock((e.target as HTMLInputElement).checked));
+for (const [key, id] of [['main', 'simMain'], ['jib', 'simJib']] as const) {
+  $<HTMLInputElement>(id).addEventListener('input', (e) => {
+    state.trim = { ...state.trim, [key]: Number((e.target as HTMLInputElement).value) };
+    setLock(false);
+  });
+}
+window.addEventListener('keyup', (e) => {
+  if (helm && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) helm.keys = 0;
+});
+{
+  // The wheel: drag sideways anywhere on the view, let go and it centres.
+  const el = $('simCanvas');
+  let x0 = 0;
+  el.addEventListener('pointerdown', (e) => {
+    if (!helm) return;
+    el.setPointerCapture(e.pointerId);
+    x0 = e.clientX;
+    helm.drag = 0;
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (helm && helm.drag !== null && el.hasPointerCapture(e.pointerId)) helm.drag = Math.max(-1, Math.min(1, (e.clientX - x0) / Math.min(220, el.clientWidth / 3)));
+  });
+  for (const type of ['pointerup', 'pointercancel'] as const) el.addEventListener(type, () => helm && (helm.drag = null));
+}
+
 // ---------- tabs & map mode ----------
 
 function showTab(tab: 'trim' | 'plan') {
@@ -1032,7 +1201,9 @@ function tick(t: number) {
   const dtReal = Math.min(0.1, (t - lastT) / 1000);
   lastT = t;
 
-  if (race?.mode === 'sim') {
+  if (helm) {
+    stepSim(dtReal, t);
+  } else if (race?.mode === 'sim') {
     // Slow the time-lapse around manoeuvres so the tack call is visible.
     const nearTurn = advice && (advice.action === 'tack' || advice.action === 'gybe' || (advice.turn && advice.turn.time < PREPARE_S * 1.5));
     const dt = dtReal * (nearTurn || race.penalty > 0 ? Math.min(race.speedup, 8) : race.speedup);

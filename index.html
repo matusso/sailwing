@@ -46,6 +46,7 @@
               <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" /><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="1.6" /></svg>
               GPS
             </button>
+            <button class="btn primary small" id="simBtn" title="Take the wheel: sail here in 3D">3D</button>
           </div>
           <div class="map-hint glass" id="mapHint"></div>
 
@@ -230,6 +231,43 @@
           </div>
         </section>
       </main>
+      <div class="sim3d hidden" id="sim3d">
+        <canvas id="simCanvas" aria-label="View from the helm. Drag left or right to turn the wheel."></canvas>
+        <div class="sim-hud glass">
+          <div class="sim-speed"><b id="simSpeed">0.0</b><small>kn</small></div>
+          <div id="simHeading">—</div>
+          <div id="simWind">—</div>
+          <div id="simDepth">—</div>
+        </div>
+        <div class="sim-top">
+          <svg class="sim-vane glass" viewBox="0 0 60 60" aria-label="Apparent wind relative to the bow">
+            <path d="M30 14 C36 22 36 36 34 46 L26 46 C24 36 24 22 30 14Z" fill="#f8fafc" />
+            <g id="simVane"><path d="M30 2 L35 12 L31.5 12 L31.5 22 L28.5 22 L28.5 12 L25 12 Z" fill="#fbbf24" /></g>
+          </svg>
+          <button class="btn ghost small glass" id="simRate" title="Time-lapse">×1</button>
+          <button class="btn ghost small glass" id="simExit" title="Back to the chart (Esc)">Exit</button>
+        </div>
+        <div class="sim-hint glass" id="simHint">Drag left / right to turn the wheel · or ← → keys</div>
+        <div class="sim-controls glass">
+          <div class="control">
+            <div class="control-head">
+              <label for="simMain">Mainsheet</label>
+              <span class="pill" id="simMainStatus"></span>
+              <output id="simMainVal">0°</output>
+            </div>
+            <input type="range" id="simMain" min="0" max="90" step="1" value="30" />
+          </div>
+          <div class="control">
+            <div class="control-head">
+              <label for="simJib">Jib sheet</label>
+              <span class="pill" id="simJibStatus"></span>
+              <output id="simJibVal">0°</output>
+            </div>
+            <input type="range" id="simJib" min="0" max="90" step="1" value="30" />
+          </div>
+          <label class="switch"><input type="checkbox" id="simLock" /><span></span>Keep trimmed</label>
+        </div>
+      </div>
       <div class="toast" id="toast" role="status"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>

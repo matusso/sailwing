@@ -22,6 +22,8 @@ Wind on the map, sails in your hands.
   - Tide: [Open Waters](https://openwaters.io/api/tides/) predictions for the nearest station within 50 km, above LAT (the datum EMODnet depths use). The lowest water of the next 3 hours is added to the charted depths.
   - This is not a nautical chart. Small rocks, moorings and anything newer than the data are missing, so keep a lookout.
 
+- **3D:** place the boat, then tap **3D** to take the wheel. You see the real coast from the cockpit: the shoreline from OpenStreetMap, hills and mountains from [Terrarium elevation tiles](https://registry.opendata.aws/terrain-tiles/), the seabed from the charted depths. Drag left / right (or hold `←` / `→`) to turn the wheel, sheet the main and jib with the sliders, or switch on *Keep trimmed* (`A`). The boat has inertia, heels, drifts with the current and runs aground on land and in water too shallow for your draft. Live wind and current refresh as you go; **×1 / ×5 / ×20** speeds up time. `Esc` returns to the chart with the boat where you left it.
+
 Keyboard: `←` / `→` steer (hold Shift for 10°), `T` tack or gybe, `A` auto-trim.
 
 ## Develop

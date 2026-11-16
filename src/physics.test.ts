@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { optimizeTrim, planCourse, polar, simulate } from './physics';
+import { optimizeTrim, planCourse, polar, simulate, stepMotion, type Motion } from './physics';
 
 describe('simulate', () => {
   it('stays in irons when pointing into the wind', () => {
@@ -57,5 +57,33 @@ describe('planCourse', () => {
     const plan = planCourse(12, 270, 0);
     expect(plan.strategy).toBe('direct');
     expect(plan.boards[0].heading).toBe(0);
+  });
+});
+
+describe('stepMotion', () => {
+  const trim = { main: 30, jib: 30 };
+  const run = (m: Motion, rudder: number, secs: number) => {
+    for (let t = 0; t < secs; t += 0.1) m = stepMotion(m, rudder, 12, 0, trim, 0.1);
+    return m;
+  };
+
+  it('picks up way gradually and settles at the equilibrium speed', () => {
+    const start = { heading: 90, speed: 0, heel: 0 };
+    const target = simulate(12, -90, trim).speed;
+    const soon = run(start, 0, 3);
+    expect(soon.speed).toBeGreaterThan(0);
+    expect(soon.speed).toBeLessThan(target * 0.6);
+    const later = run(start, 0, 60);
+    expect(later.speed).toBeCloseTo(target, 1);
+    expect(later.heading).toBe(90);
+    expect(later.heel).toBeLessThan(0); // wind from port: heels to starboard
+  });
+
+  it('carries its way through a tack', () => {
+    const closeHauled = run({ heading: 50, speed: 0, heel: 0 }, 0, 60);
+    let m: Motion = closeHauled;
+    while (m.heading > 5 && m.heading < 180) m = stepMotion(m, -1, 12, 0, trim, 0.1); // helm down, through the wind
+    expect(m.speed).toBeGreaterThan(1);
+    expect(m.speed).toBeLessThan(closeHauled.speed);
   });
 });
